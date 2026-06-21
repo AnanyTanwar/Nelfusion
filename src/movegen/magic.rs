@@ -101,6 +101,14 @@ pub const fn bishop_attacks_slow(sq: i32, occupied: Bitboard) -> Bitboard {
     attacks
 }
 
+/// Carry-Rippler trick: enumerate all subsets of a mask
+/// Starting from subset = 0, repeatedly calling this cycles through
+/// every subset of `mask`, eventually returning to 0.
+#[inline(always)]
+pub const fn next_subset(subset: Bitboard, mask: Bitboard) -> Bitboard {
+    (subset.wrapping_sub(mask)) & mask
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +156,20 @@ mod tests {
     fn test_bishop_attacks_open_board() {
         let attacks = bishop_attacks_slow(28, 0);
         assert_eq!(pop_count(attacks), 13);
+    }
+
+    #[test]
+    fn test_subset_enumeration_count() {
+        let mask = rook_relevant_mask(0); // 12 bits for rook on a1
+        let mut subset: Bitboard = 0;
+        let mut count = 0;
+        loop {
+            count += 1;
+            subset = next_subset(subset, mask);
+            if subset == 0 {
+                break;
+            }
+        }
+        assert_eq!(count, 1 << 12); // 4096 subsets total
     }
 }
