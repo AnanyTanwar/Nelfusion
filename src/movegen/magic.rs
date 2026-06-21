@@ -1,4 +1,5 @@
 use crate::board::bitboard::Bitboard;
+use crate::board::bitboard::pop_count;
 
 pub const fn rook_relevant_mask(sq: i32) -> Bitboard {
     let rank = sq / 8;
@@ -109,10 +110,90 @@ pub const fn next_subset(subset: Bitboard, mask: Bitboard) -> Bitboard {
     (subset.wrapping_sub(mask)) & mask
 }
 
+/// Minimal xorshift PRNG for magic number generation
+/// Deterministic and fast - no external crates needed
+pub struct Rng {
+    state: u64,
+}
+
+impl Rng {
+    pub fn new(seed: u64) -> Rng {
+        Rng { state: seed }
+    }
+
+    pub fn next_u64(&mut self) -> u64 {
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.state = x;
+        x
+    }
+
+    /// Bias toward sparse magic numbers (fewer set bits)
+    /// Empirical trick: sparse magics work better/faster
+    pub fn next_sparse_u64(&mut self) -> u64 {
+        self.next_u64() & self.next_u64() & self.next_u64()
+    }
+}
+
+/// Find a working magic number for a given square and mask
+/// Uses the Carry-Rippler trick to enumerate all occupancy subsets
+/// Tests random candidates until one works
+pub fn find_magic(sq: i32, mask: Bitboard, is_rook: bool, rng: &mut Rng) -> u64 {
+    let bits = pop_count(mask) as u32;
+    let shift = 64 - bits;
+
+    // Precompute all subset -> attack pairs once
+    let mut subsets: Vec<Bitboard> = Vec::new();
+    let mut attacks: Vec<Bitboard> = Vec::new();
+
+    let mut subset: Bitboard = 0;
+    loop {
+        subsets.push(subset);
+        let atk = if is_rook {
+            rook_attacks_slow(sq, subset)
+        } else {
+            bishop_attacks_slow(sq, subset)
+        };
+        attacks.push(atk);
+
+        subset = next_subset(subset, mask);
+        if subset == 0 {
+            break;
+        }
+    }
+
+    let table_size = 1usize << bits;
+
+    loop {
+        let candidate = rng.next_sparse_u64();
+
+        let mut used: Vec<Bitboard> = vec![0; table_size];
+        let mut filled: Vec<bool> = vec![false; table_size];
+        let mut ok = true;
+
+        for i in 0..subsets.len() {
+            let idx = ((subsets[i].wrapping_mul(candidate)) >> shift) as usize;
+
+            if !filled[idx] {
+                filled[idx] = true;
+                used[idx] = attacks[i];
+            } else if used[idx] != attacks[i] {
+                ok = false;
+                break;
+            }
+        }
+
+        if ok {
+            return candidate;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::bitboard::pop_count;
 
     #[test]
     fn test_rook_mask_corner() {
@@ -171,5 +252,13 @@ mod tests {
             }
         }
         assert_eq!(count, 1 << 12); // 4096 subsets total
+    }
+
+    #[test]
+    fn test_find_magic_rook_corner() {
+        let mut rng = Rng::new(0x1234567890ABCDEF);
+        let mask = rook_relevant_mask(0);
+        let magic = find_magic(0, mask, true, &mut rng);
+        assert!(magic != 0); // sanity check, a valid magic was found at all
     }
 }
