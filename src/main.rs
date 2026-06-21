@@ -5,6 +5,6 @@ mod eval;
 mod uci;
 
 fn main() {
-    println!("Eclipse a UCI chess engine");
+    println!("Nelfusion a UCI chess engine");
     uci::run();
 }
