@@ -1,5 +1,7 @@
 use crate::board::bitboard::pop_lsb;
-use crate::board::position::{Color, PieceType, Position};
+use crate::board::position::{
+    BK_CASTLE, BQ_CASTLE, Color, PieceType, Position, WK_CASTLE, WQ_CASTLE,
+};
 use crate::movegen::magic::MAGIC_TABLES;
 use crate::movegen::moves::{Move, MoveList, PromoPiece};
 use crate::movegen::tables::{
@@ -147,6 +149,39 @@ pub fn generate_pawn_moves(pos: &Position, list: &mut MoveList) {
     }
 }
 
+pub fn generate_castling_moves(pos: &Position, list: &mut MoveList) {
+    let us = pos.side_to_move;
+    let occupied = pos.occupied;
+
+    if us == Color::White {
+        if pos.castling_rights & WK_CASTLE != 0 {
+            // e1=4, f1=5, g1=6, h1=7 — squares between king and rook must be empty
+            if (occupied >> 5) & 1 == 0 && (occupied >> 6) & 1 == 0 {
+                list.push(Move::new_castling(4, 6));
+            }
+        }
+        if pos.castling_rights & WQ_CASTLE != 0 {
+            // e1=4, d1=3, c1=2, b1=1, a1=0
+            if (occupied >> 1) & 1 == 0 && (occupied >> 2) & 1 == 0 && (occupied >> 3) & 1 == 0 {
+                list.push(Move::new_castling(4, 2));
+            }
+        }
+    } else {
+        if pos.castling_rights & BK_CASTLE != 0 {
+            // e8=60, f8=61, g8=62, h8=63
+            if (occupied >> 61) & 1 == 0 && (occupied >> 62) & 1 == 0 {
+                list.push(Move::new_castling(60, 62));
+            }
+        }
+        if pos.castling_rights & BQ_CASTLE != 0 {
+            // e8=60, d8=59, c8=58, b8=57, a8=56
+            if (occupied >> 57) & 1 == 0 && (occupied >> 58) & 1 == 0 && (occupied >> 59) & 1 == 0 {
+                list.push(Move::new_castling(60, 58));
+            }
+        }
+    }
+}
+
 fn push_promotions(list: &mut MoveList, from: u8, to: u8) {
     list.push(Move::new_promotion(from, to, PromoPiece::Queen));
     list.push(Move::new_promotion(from, to, PromoPiece::Rook));
@@ -237,5 +272,21 @@ mod tests {
         generate_pawn_moves(&pos, &mut list);
         let has_ep = list.as_slice().iter().any(|m| m.to() == 16);
         assert!(has_ep);
+    }
+
+    #[test]
+    fn test_castling_startpos_none_available() {
+        let pos = Position::startpos();
+        let mut list = MoveList::new();
+        generate_castling_moves(&pos, &mut list);
+        assert_eq!(list.len(), 0);
+    }
+
+    #[test]
+    fn test_castling_kingside_available() {
+        let pos = Position::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+        let mut list = MoveList::new();
+        generate_castling_moves(&pos, &mut list);
+        assert_eq!(list.len(), 2);
     }
 }
