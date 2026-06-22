@@ -102,16 +102,11 @@ pub const fn bishop_attacks_slow(sq: i32, occupied: Bitboard) -> Bitboard {
     attacks
 }
 
-/// Carry-Rippler trick: enumerate all subsets of a mask
-/// Starting from subset = 0, repeatedly calling this cycles through
-/// every subset of `mask`, eventually returning to 0.
 #[inline(always)]
 pub const fn next_subset(subset: Bitboard, mask: Bitboard) -> Bitboard {
     (subset.wrapping_sub(mask)) & mask
 }
 
-/// Minimal xorshift PRNG for magic number generation
-/// Deterministic and fast - no external crates needed
 pub struct Rng {
     state: u64,
 }
@@ -130,21 +125,15 @@ impl Rng {
         x
     }
 
-    /// Bias toward sparse magic numbers (fewer set bits)
-    /// Empirical trick: sparse magics work better/faster
     pub fn next_sparse_u64(&mut self) -> u64 {
         self.next_u64() & self.next_u64() & self.next_u64()
     }
 }
 
-/// Find a working magic number for a given square and mask
-/// Uses the Carry-Rippler trick to enumerate all occupancy subsets
-/// Tests random candidates until one works
 pub fn find_magic(sq: i32, mask: Bitboard, is_rook: bool, rng: &mut Rng) -> u64 {
     let bits = pop_count(mask) as u32;
     let shift = 64 - bits;
 
-    // Precompute all subset -> attack pairs once
     let mut subsets: Vec<Bitboard> = Vec::new();
     let mut attacks: Vec<Bitboard> = Vec::new();
 
@@ -188,6 +177,116 @@ pub fn find_magic(sq: i32, mask: Bitboard, is_rook: bool, rng: &mut Rng) -> u64 
         if ok {
             return candidate;
         }
+    }
+}
+
+pub struct MagicEntry {
+    pub mask: Bitboard,
+    pub magic: u64,
+    pub shift: u32,
+    pub offset: usize,
+}
+
+pub struct MagicTables {
+    pub rook_magics: [MagicEntry; 64],
+    pub bishop_magics: [MagicEntry; 64],
+    pub rook_table: Vec<Bitboard>,
+    pub bishop_table: Vec<Bitboard>,
+}
+
+impl MagicTables {
+    pub fn generate() -> MagicTables {
+        let mut rng = Rng::new(0x1234567890ABCDEF);
+
+        let mut rook_magics: Vec<MagicEntry> = Vec::with_capacity(64);
+        let mut bishop_magics: Vec<MagicEntry> = Vec::with_capacity(64);
+        let mut rook_table: Vec<Bitboard> = Vec::new();
+        let mut bishop_table: Vec<Bitboard> = Vec::new();
+
+        for sq in 0..64 {
+            let mask = rook_relevant_mask(sq);
+            let bits = pop_count(mask);
+            let shift = 64 - bits;
+            let magic = find_magic(sq, mask, true, &mut rng);
+            let offset = rook_table.len();
+            let table_size = 1usize << bits;
+
+            rook_table.resize(offset + table_size, 0);
+
+            let mut subset: Bitboard = 0;
+            loop {
+                let idx = ((subset.wrapping_mul(magic)) >> shift) as usize;
+                rook_table[offset + idx] = rook_attacks_slow(sq, subset);
+
+                subset = next_subset(subset, mask);
+                if subset == 0 {
+                    break;
+                }
+            }
+
+            rook_magics.push(MagicEntry {
+                mask,
+                magic,
+                shift,
+                offset,
+            });
+        }
+
+        for sq in 0..64 {
+            let mask = bishop_relevant_mask(sq);
+            let bits = pop_count(mask);
+            let shift = 64 - bits;
+            let magic = find_magic(sq, mask, false, &mut rng);
+            let offset = bishop_table.len();
+            let table_size = 1usize << bits;
+
+            bishop_table.resize(offset + table_size, 0);
+
+            let mut subset: Bitboard = 0;
+            loop {
+                let idx = ((subset.wrapping_mul(magic)) >> shift) as usize;
+                bishop_table[offset + idx] = bishop_attacks_slow(sq, subset);
+
+                subset = next_subset(subset, mask);
+                if subset == 0 {
+                    break;
+                }
+            }
+
+            bishop_magics.push(MagicEntry {
+                mask,
+                magic,
+                shift,
+                offset,
+            });
+        }
+
+        MagicTables {
+            rook_magics: rook_magics
+                .try_into()
+                .unwrap_or_else(|_| panic!("expected 64 rook magics")),
+            bishop_magics: bishop_magics
+                .try_into()
+                .unwrap_or_else(|_| panic!("expected 64 bishop magics")),
+            rook_table,
+            bishop_table,
+        }
+    }
+
+    #[inline(always)]
+    pub fn rook_attacks(&self, sq: usize, occupied: Bitboard) -> Bitboard {
+        let entry = &self.rook_magics[sq];
+        let relevant = occupied & entry.mask;
+        let idx = ((relevant.wrapping_mul(entry.magic)) >> entry.shift) as usize;
+        self.rook_table[entry.offset + idx]
+    }
+
+    #[inline(always)]
+    pub fn bishop_attacks(&self, sq: usize, occupied: Bitboard) -> Bitboard {
+        let entry = &self.bishop_magics[sq];
+        let relevant = occupied & entry.mask;
+        let idx = ((relevant.wrapping_mul(entry.magic)) >> entry.shift) as usize;
+        self.bishop_table[entry.offset + idx]
     }
 }
 
@@ -241,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_subset_enumeration_count() {
-        let mask = rook_relevant_mask(0); // 12 bits for rook on a1
+        let mask = rook_relevant_mask(0);
         let mut subset: Bitboard = 0;
         let mut count = 0;
         loop {
@@ -251,7 +350,7 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(count, 1 << 12); // 4096 subsets total
+        assert_eq!(count, 1 << 12);
     }
 
     #[test]
@@ -259,6 +358,40 @@ mod tests {
         let mut rng = Rng::new(0x1234567890ABCDEF);
         let mask = rook_relevant_mask(0);
         let magic = find_magic(0, mask, true, &mut rng);
-        assert!(magic != 0); // sanity check, a valid magic was found at all
+        assert!(magic != 0);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_magic_tables_match_slow_attacks() {
+        let tables = MagicTables::generate();
+
+        for sq in 0..64 {
+            let rook_mask = rook_relevant_mask(sq);
+            let mut subset: Bitboard = 0;
+            loop {
+                let fast = tables.rook_attacks(sq as usize, subset);
+                let slow = rook_attacks_slow(sq, subset);
+                assert_eq!(fast, slow, "rook mismatch at sq {} occ {:#x}", sq, subset);
+
+                subset = next_subset(subset, rook_mask);
+                if subset == 0 {
+                    break;
+                }
+            }
+
+            let bishop_mask = bishop_relevant_mask(sq);
+            subset = 0;
+            loop {
+                let fast = tables.bishop_attacks(sq as usize, subset);
+                let slow = bishop_attacks_slow(sq, subset);
+                assert_eq!(fast, slow, "bishop mismatch at sq {} occ {:#x}", sq, subset);
+
+                subset = next_subset(subset, bishop_mask);
+                if subset == 0 {
+                    break;
+                }
+            }
+        }
     }
 }
