@@ -1,5 +1,6 @@
+pub mod history;
 pub mod negamax;
-pub mod iterative;
-pub mod tt;
 pub mod ordering;
+pub mod search;
 pub mod time;
+pub mod tt;
