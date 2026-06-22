@@ -1,4 +1,4 @@
-use crate::board::bitboard::{Bitboard, EMPTY, set_bit, clear_bit, get_bit, pop_count};
+use crate::board::bitboard::{Bitboard, EMPTY, get_bit, pop_count};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Color {
@@ -29,10 +29,10 @@ pub enum PieceType {
 pub const NUM_PIECE_TYPES: usize = 6;
 
 // Castling rights as bit flags
-pub const WK_CASTLE: u8 = 1;      // white king-side
-pub const WQ_CASTLE: u8 = 2;      // white queen-side
-pub const BK_CASTLE: u8 = 4;      // black king-side
-pub const BQ_CASTLE: u8 = 8;      // black queen-side
+pub const WK_CASTLE: u8 = 1; // white king-side
+pub const WQ_CASTLE: u8 = 2; // white queen-side
+pub const BK_CASTLE: u8 = 4; // black king-side
+pub const BQ_CASTLE: u8 = 8; // black queen-side
 
 #[derive(Copy, Clone, Debug)]
 pub struct Position {
@@ -45,8 +45,8 @@ pub struct Position {
 
     pub side_to_move: Color,
     pub castling_rights: u8,
-    pub en_passant: Option<u8>,     // square index, if a double pawn push just happened
-    pub halfmove_clock: u16,        // for 50-move rule
+    pub en_passant: Option<u8>, // square index, if a double pawn push just happened
+    pub halfmove_clock: u16,    // for 50-move rule
     pub fullmove_number: u16,
 }
 
@@ -68,20 +68,20 @@ impl Position {
         let mut pos = Position::empty();
 
         // White pieces
-        pos.pieces[Color::White as usize][PieceType::Pawn as usize]   = 0x0000_0000_0000_FF00;
+        pos.pieces[Color::White as usize][PieceType::Pawn as usize] = 0x0000_0000_0000_FF00;
         pos.pieces[Color::White as usize][PieceType::Knight as usize] = 0x0000_0000_0000_0042;
         pos.pieces[Color::White as usize][PieceType::Bishop as usize] = 0x0000_0000_0000_0024;
-        pos.pieces[Color::White as usize][PieceType::Rook as usize]   = 0x0000_0000_0000_0081;
-        pos.pieces[Color::White as usize][PieceType::Queen as usize]  = 0x0000_0000_0000_0008;
-        pos.pieces[Color::White as usize][PieceType::King as usize]   = 0x0000_0000_0000_0010;
+        pos.pieces[Color::White as usize][PieceType::Rook as usize] = 0x0000_0000_0000_0081;
+        pos.pieces[Color::White as usize][PieceType::Queen as usize] = 0x0000_0000_0000_0008;
+        pos.pieces[Color::White as usize][PieceType::King as usize] = 0x0000_0000_0000_0010;
 
         // Black pieces (mirrored on ranks 7 and 8)
-        pos.pieces[Color::Black as usize][PieceType::Pawn as usize]   = 0x00FF_0000_0000_0000;
+        pos.pieces[Color::Black as usize][PieceType::Pawn as usize] = 0x00FF_0000_0000_0000;
         pos.pieces[Color::Black as usize][PieceType::Knight as usize] = 0x4200_0000_0000_0000;
         pos.pieces[Color::Black as usize][PieceType::Bishop as usize] = 0x2400_0000_0000_0000;
-        pos.pieces[Color::Black as usize][PieceType::Rook as usize]   = 0x8100_0000_0000_0000;
-        pos.pieces[Color::Black as usize][PieceType::Queen as usize]  = 0x0800_0000_0000_0000;
-        pos.pieces[Color::Black as usize][PieceType::King as usize]   = 0x1000_0000_0000_0000;
+        pos.pieces[Color::Black as usize][PieceType::Rook as usize] = 0x8100_0000_0000_0000;
+        pos.pieces[Color::Black as usize][PieceType::Queen as usize] = 0x0800_0000_0000_0000;
+        pos.pieces[Color::Black as usize][PieceType::King as usize] = 0x1000_0000_0000_0000;
 
         pos.update_occupancy();
         pos
@@ -94,7 +94,8 @@ impl Position {
         self.occupied_by[Color::Black as usize] = self.pieces[Color::Black as usize]
             .iter()
             .fold(EMPTY, |acc, &bb| acc | bb);
-        self.occupied = self.occupied_by[Color::White as usize] | self.occupied_by[Color::Black as usize];
+        self.occupied =
+            self.occupied_by[Color::White as usize] | self.occupied_by[Color::Black as usize];
     }
 
     /// Returns the piece type and color occupying a square, if any.
@@ -119,7 +120,10 @@ impl Position {
     }
 
     pub fn material_count(&self, color: Color) -> u32 {
-        self.pieces[color as usize].iter().map(|bb| pop_count(*bb)).sum()
+        self.pieces[color as usize]
+            .iter()
+            .map(|bb| pop_count(*bb))
+            .sum()
     }
 
     pub fn print(&self) {
@@ -128,18 +132,18 @@ impl Position {
             for file in 0..8 {
                 let sq = rank * 8 + file;
                 let symbol = match self.piece_at(sq) {
-                    Some((Color::White, PieceType::Pawn))   => 'P',
+                    Some((Color::White, PieceType::Pawn)) => 'P',
                     Some((Color::White, PieceType::Knight)) => 'N',
                     Some((Color::White, PieceType::Bishop)) => 'B',
-                    Some((Color::White, PieceType::Rook))   => 'R',
-                    Some((Color::White, PieceType::Queen))  => 'Q',
-                    Some((Color::White, PieceType::King))   => 'K',
-                    Some((Color::Black, PieceType::Pawn))   => 'p',
+                    Some((Color::White, PieceType::Rook)) => 'R',
+                    Some((Color::White, PieceType::Queen)) => 'Q',
+                    Some((Color::White, PieceType::King)) => 'K',
+                    Some((Color::Black, PieceType::Pawn)) => 'p',
                     Some((Color::Black, PieceType::Knight)) => 'n',
                     Some((Color::Black, PieceType::Bishop)) => 'b',
-                    Some((Color::Black, PieceType::Rook))   => 'r',
-                    Some((Color::Black, PieceType::Queen))  => 'q',
-                    Some((Color::Black, PieceType::King))   => 'k',
+                    Some((Color::Black, PieceType::Rook)) => 'r',
+                    Some((Color::Black, PieceType::Queen)) => 'q',
+                    Some((Color::Black, PieceType::King)) => 'k',
                     None => '.',
                 };
                 print!("{} ", symbol);
