@@ -4,6 +4,7 @@ use crate::movegen::moves::{Move, MoveType, PromoPiece};
 
 #[derive(Copy, Clone, Debug)]
 pub struct UnmakeInfo {
+    pub moving_piece: PieceType,
     pub captured_piece: Option<PieceType>,
     pub was_en_passant: bool,
     pub prev_castling_rights: u8,
@@ -22,45 +23,39 @@ impl Position {
         let moving_pt = self
             .piece_at(from)
             .map(|(_, pt)| pt)
-            .expect("make_move called with no piece on from-square");
+            .expect("make_move: no piece on from-square");
 
-        let is_en_passant = move_type == MoveType::EnPassant;
-
-        let captured_piece = if is_en_passant {
+        let captured_piece = if move_type == MoveType::EnPassant {
             Some(PieceType::Pawn)
         } else {
             self.piece_at(to).map(|(_, pt)| pt)
         };
 
         let info = UnmakeInfo {
+            moving_piece: moving_pt,
             captured_piece,
-            was_en_passant: is_en_passant,
+            was_en_passant: move_type == MoveType::EnPassant,
             prev_castling_rights: self.castling_rights,
             prev_en_passant: self.en_passant,
             prev_halfmove_clock: self.halfmove_clock,
         };
 
-        if is_en_passant {
+        if move_type == MoveType::EnPassant {
             let captured_sq = if us == Color::White { to - 8 } else { to + 8 };
             self.pieces[them as usize][PieceType::Pawn as usize] = clear_bit(
                 self.pieces[them as usize][PieceType::Pawn as usize],
                 captured_sq,
             );
-        } else if let Some(captured_pt) = captured_piece {
-            self.pieces[them as usize][captured_pt as usize] =
-                clear_bit(self.pieces[them as usize][captured_pt as usize], to);
+        } else if let Some(cap_pt) = captured_piece {
+            self.pieces[them as usize][cap_pt as usize] =
+                clear_bit(self.pieces[them as usize][cap_pt as usize], to);
         }
 
         self.pieces[us as usize][moving_pt as usize] =
             clear_bit(self.pieces[us as usize][moving_pt as usize], from);
 
         if move_type == MoveType::Promotion {
-            let promo_pt = match m.promo_piece() {
-                PromoPiece::Knight => PieceType::Knight,
-                PromoPiece::Bishop => PieceType::Bishop,
-                PromoPiece::Rook => PieceType::Rook,
-                PromoPiece::Queen => PieceType::Queen,
-            };
+            let promo_pt = promo_piece_type(m.promo_piece());
             self.pieces[us as usize][promo_pt as usize] =
                 set_bit(self.pieces[us as usize][promo_pt as usize], to);
         } else {
@@ -69,13 +64,7 @@ impl Position {
         }
 
         if move_type == MoveType::Castling {
-            let (rook_from, rook_to) = match to {
-                6 => (7, 5),
-                2 => (0, 3),
-                62 => (63, 61),
-                58 => (56, 59),
-                _ => unreachable!("castling move with invalid destination square"),
-            };
+            let (rook_from, rook_to) = castling_rook_squares(to);
             self.pieces[us as usize][PieceType::Rook as usize] = clear_bit(
                 self.pieces[us as usize][PieceType::Rook as usize],
                 rook_from,
@@ -87,25 +76,15 @@ impl Position {
         self.castling_rights &= !castling_bits_lost(from, to);
 
         self.en_passant = None;
-        if moving_pt == PieceType::Pawn {
-            let from_rank = from / 8;
-            let to_rank = to / 8;
-            let rank_diff = if to_rank > from_rank {
-                to_rank - from_rank
+        if moving_pt == PieceType::Pawn && (to as i32 - from as i32).unsigned_abs() == 16 {
+            self.en_passant = Some(if us == Color::White {
+                from + 8
             } else {
-                from_rank - to_rank
-            };
-            if rank_diff == 2 {
-                let ep_sq = if us == Color::White {
-                    from + 8
-                } else {
-                    from - 8
-                };
-                self.en_passant = Some(ep_sq);
-            }
+                from - 8
+            });
         }
 
-        if moving_pt == PieceType::Pawn || info.captured_piece.is_some() {
+        if moving_pt == PieceType::Pawn || captured_piece.is_some() {
             self.halfmove_clock = 0;
         } else {
             self.halfmove_clock += 1;
@@ -137,13 +116,7 @@ impl Position {
         self.halfmove_clock = info.prev_halfmove_clock;
 
         if move_type == MoveType::Castling {
-            let (rook_from, rook_to) = match to {
-                6 => (7, 5),
-                2 => (0, 3),
-                62 => (63, 61),
-                58 => (56, 59),
-                _ => unreachable!("castling move with invalid destination square"),
-            };
+            let (rook_from, rook_to) = castling_rook_squares(to);
             self.pieces[us as usize][PieceType::Rook as usize] =
                 clear_bit(self.pieces[us as usize][PieceType::Rook as usize], rook_to);
             self.pieces[us as usize][PieceType::Rook as usize] = set_bit(
@@ -153,26 +126,16 @@ impl Position {
         }
 
         if move_type == MoveType::Promotion {
-            let promo_pt = match m.promo_piece() {
-                PromoPiece::Knight => PieceType::Knight,
-                PromoPiece::Bishop => PieceType::Bishop,
-                PromoPiece::Rook => PieceType::Rook,
-                PromoPiece::Queen => PieceType::Queen,
-            };
+            let promo_pt = promo_piece_type(m.promo_piece());
             self.pieces[us as usize][promo_pt as usize] =
                 clear_bit(self.pieces[us as usize][promo_pt as usize], to);
-            self.pieces[us as usize][PieceType::Pawn as usize] =
-                set_bit(self.pieces[us as usize][PieceType::Pawn as usize], from);
         } else {
-            let moving_pt = self
-                .piece_at(to)
-                .map(|(_, pt)| pt)
-                .expect("unmake_move: no piece on to-square");
-            self.pieces[us as usize][moving_pt as usize] =
-                clear_bit(self.pieces[us as usize][moving_pt as usize], to);
-            self.pieces[us as usize][moving_pt as usize] =
-                set_bit(self.pieces[us as usize][moving_pt as usize], from);
+            self.pieces[us as usize][info.moving_piece as usize] =
+                clear_bit(self.pieces[us as usize][info.moving_piece as usize], to);
         }
+
+        self.pieces[us as usize][info.moving_piece as usize] =
+            set_bit(self.pieces[us as usize][info.moving_piece as usize], from);
 
         if info.was_en_passant {
             let captured_sq = if us == Color::White { to - 8 } else { to + 8 };
@@ -180,18 +143,38 @@ impl Position {
                 self.pieces[them as usize][PieceType::Pawn as usize],
                 captured_sq,
             );
-        } else if let Some(captured_pt) = info.captured_piece {
-            self.pieces[them as usize][captured_pt as usize] =
-                set_bit(self.pieces[them as usize][captured_pt as usize], to);
+        } else if let Some(cap_pt) = info.captured_piece {
+            self.pieces[them as usize][cap_pt as usize] =
+                set_bit(self.pieces[them as usize][cap_pt as usize], to);
         }
 
         self.update_occupancy();
     }
 }
 
+#[inline(always)]
+fn promo_piece_type(p: PromoPiece) -> PieceType {
+    match p {
+        PromoPiece::Knight => PieceType::Knight,
+        PromoPiece::Bishop => PieceType::Bishop,
+        PromoPiece::Rook => PieceType::Rook,
+        PromoPiece::Queen => PieceType::Queen,
+    }
+}
+
+#[inline(always)]
+fn castling_rook_squares(king_to: u8) -> (u8, u8) {
+    match king_to {
+        6 => (7, 5),
+        2 => (0, 3),
+        62 => (63, 61),
+        58 => (56, 59),
+        _ => unreachable!("invalid castling king destination"),
+    }
+}
+
 fn castling_bits_lost(from: u8, to: u8) -> u8 {
     use crate::board::position::{BK_CASTLE, BQ_CASTLE, WK_CASTLE, WQ_CASTLE};
-
     let mut lost = 0u8;
     for sq in [from, to] {
         lost |= match sq {
@@ -284,8 +267,7 @@ mod tests {
 
     #[test]
     fn test_unmake_simple_push() {
-        let original = Position::startpos();
-        let mut pos = original;
+        let mut pos = Position::startpos();
         let m = Move::new(12, 28);
         let info = pos.make_move(m);
         pos.unmake_move(m, info);
