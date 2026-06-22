@@ -1,7 +1,7 @@
 mod board;
+mod eval;
 mod movegen;
 mod search;
-mod eval;
 mod uci;
 
 fn main() {
