@@ -119,6 +119,74 @@ impl Position {
         self.update_occupancy();
         info
     }
+
+    pub fn unmake_move(&mut self, m: Move, info: UnmakeInfo) {
+        let them = self.side_to_move;
+        let us = them.opposite();
+        let from = m.from();
+        let to = m.to();
+        let move_type = m.move_type();
+
+        self.side_to_move = us;
+        if us == Color::Black {
+            self.fullmove_number -= 1;
+        }
+
+        self.castling_rights = info.prev_castling_rights;
+        self.en_passant = info.prev_en_passant;
+        self.halfmove_clock = info.prev_halfmove_clock;
+
+        if move_type == MoveType::Castling {
+            let (rook_from, rook_to) = match to {
+                6 => (7, 5),
+                2 => (0, 3),
+                62 => (63, 61),
+                58 => (56, 59),
+                _ => unreachable!("castling move with invalid destination square"),
+            };
+            self.pieces[us as usize][PieceType::Rook as usize] =
+                clear_bit(self.pieces[us as usize][PieceType::Rook as usize], rook_to);
+            self.pieces[us as usize][PieceType::Rook as usize] = set_bit(
+                self.pieces[us as usize][PieceType::Rook as usize],
+                rook_from,
+            );
+        }
+
+        if move_type == MoveType::Promotion {
+            let promo_pt = match m.promo_piece() {
+                PromoPiece::Knight => PieceType::Knight,
+                PromoPiece::Bishop => PieceType::Bishop,
+                PromoPiece::Rook => PieceType::Rook,
+                PromoPiece::Queen => PieceType::Queen,
+            };
+            self.pieces[us as usize][promo_pt as usize] =
+                clear_bit(self.pieces[us as usize][promo_pt as usize], to);
+            self.pieces[us as usize][PieceType::Pawn as usize] =
+                set_bit(self.pieces[us as usize][PieceType::Pawn as usize], from);
+        } else {
+            let moving_pt = self
+                .piece_at(to)
+                .map(|(_, pt)| pt)
+                .expect("unmake_move: no piece on to-square");
+            self.pieces[us as usize][moving_pt as usize] =
+                clear_bit(self.pieces[us as usize][moving_pt as usize], to);
+            self.pieces[us as usize][moving_pt as usize] =
+                set_bit(self.pieces[us as usize][moving_pt as usize], from);
+        }
+
+        if info.was_en_passant {
+            let captured_sq = if us == Color::White { to - 8 } else { to + 8 };
+            self.pieces[them as usize][PieceType::Pawn as usize] = set_bit(
+                self.pieces[them as usize][PieceType::Pawn as usize],
+                captured_sq,
+            );
+        } else if let Some(captured_pt) = info.captured_piece {
+            self.pieces[them as usize][captured_pt as usize] =
+                set_bit(self.pieces[them as usize][captured_pt as usize], to);
+        }
+
+        self.update_occupancy();
+    }
 }
 
 fn castling_bits_lost(from: u8, to: u8) -> u8 {
@@ -212,5 +280,79 @@ mod tests {
 
         assert_eq!(pos.castling_rights & (WK_CASTLE | WQ_CASTLE), 0);
         assert_ne!(pos.castling_rights & (BK_CASTLE | BQ_CASTLE), 0);
+    }
+
+    #[test]
+    fn test_unmake_simple_push() {
+        let original = Position::startpos();
+        let mut pos = original;
+        let m = Move::new(12, 28);
+        let info = pos.make_move(m);
+        pos.unmake_move(m, info);
+
+        assert_eq!(pos.piece_at(12), Some((Color::White, PieceType::Pawn)));
+        assert_eq!(pos.piece_at(28), None);
+        assert_eq!(pos.side_to_move, Color::White);
+        assert_eq!(pos.en_passant, None);
+    }
+
+    #[test]
+    fn test_unmake_capture_restores_captured_piece() {
+        let mut pos = Position::from_fen("8/1k6/8/8/4n3/8/4R3/7K w - - 0 1").unwrap();
+        let m = Move::new(12, 28);
+        let info = pos.make_move(m);
+        pos.unmake_move(m, info);
+
+        assert_eq!(pos.piece_at(28), Some((Color::Black, PieceType::Knight)));
+        assert_eq!(pos.piece_at(12), Some((Color::White, PieceType::Rook)));
+    }
+
+    #[test]
+    fn test_unmake_en_passant_restores_captured_pawn() {
+        let mut pos = Position::from_fen("8/8/8/8/Pp6/8/8/8 b - a3 0 1").unwrap();
+        let m = Move::new_en_passant(25, 16);
+        let info = pos.make_move(m);
+        pos.unmake_move(m, info);
+
+        assert_eq!(pos.piece_at(24), Some((Color::White, PieceType::Pawn)));
+        assert_eq!(pos.piece_at(25), Some((Color::Black, PieceType::Pawn)));
+        assert_eq!(pos.piece_at(16), None);
+    }
+
+    #[test]
+    fn test_unmake_castling_restores_rook() {
+        let mut pos = Position::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+        let m = Move::new_castling(4, 6);
+        let info = pos.make_move(m);
+        pos.unmake_move(m, info);
+
+        assert_eq!(pos.piece_at(4), Some((Color::White, PieceType::King)));
+        assert_eq!(pos.piece_at(7), Some((Color::White, PieceType::Rook)));
+        assert_eq!(pos.piece_at(5), None);
+        assert_eq!(pos.piece_at(6), None);
+    }
+
+    #[test]
+    fn test_unmake_promotion_restores_pawn() {
+        let mut pos = Position::from_fen("8/P7/8/8/8/8/8/8 w - - 0 1").unwrap();
+        let m = Move::new_promotion(48, 56, PromoPiece::Queen);
+        let info = pos.make_move(m);
+        pos.unmake_move(m, info);
+
+        assert_eq!(pos.piece_at(48), Some((Color::White, PieceType::Pawn)));
+        assert_eq!(pos.piece_at(56), None);
+    }
+
+    #[test]
+    fn test_unmake_restores_castling_rights() {
+        let mut pos = Position::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+        let m = Move::new(4, 12);
+        let info = pos.make_move(m);
+        pos.unmake_move(m, info);
+
+        assert_eq!(
+            pos.castling_rights & (WK_CASTLE | WQ_CASTLE),
+            WK_CASTLE | WQ_CASTLE
+        );
     }
 }
