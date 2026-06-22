@@ -1,5 +1,6 @@
 use crate::board::bitboard::Bitboard;
 use crate::board::bitboard::pop_count;
+use std::sync::LazyLock;
 
 pub const fn rook_relevant_mask(sq: i32) -> Bitboard {
     let rank = sq / 8;
@@ -289,6 +290,8 @@ impl MagicTables {
         self.bishop_table[entry.offset + idx]
     }
 }
+
+pub static MAGIC_TABLES: LazyLock<MagicTables> = LazyLock::new(MagicTables::generate);
 
 #[cfg(test)]
 mod tests {
