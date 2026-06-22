@@ -34,11 +34,17 @@ pub fn generate_king_moves(pos: &Position, list: &mut MoveList) {
     }
 
     let from = king_bb.trailing_zeros() as u8;
-    let mut targets = KING_ATTACKS[from as usize] & !own_pieces;
+    let them = us.opposite();
 
+    // Remove king from occupied so it doesn't block its own ray when moving
+    let occ_no_king = pos.occupied ^ king_bb;
+
+    let mut targets = KING_ATTACKS[from as usize] & !own_pieces;
     while targets != 0 {
         let to = pop_lsb(&mut targets);
-        list.push(Move::new(from, to));
+        if !pos.is_square_attacked(to, them, occ_no_king) {
+            list.push(Move::new(from, to));
+        }
     }
 }
 
@@ -111,7 +117,6 @@ pub fn generate_pawn_moves(pos: &Position, list: &mut MoveList) {
         let from = pop_lsb(&mut pawns);
         let from_rank = from / 8;
 
-        // Single push
         let to_push = (from as i32 + push_offset) as u8;
         if to_push < 64 && (empty >> to_push) & 1 != 0 {
             if to_push / 8 == promo_rank {
@@ -119,7 +124,6 @@ pub fn generate_pawn_moves(pos: &Position, list: &mut MoveList) {
             } else {
                 list.push(Move::new(from, to_push));
 
-                // Double push
                 if from_rank == start_rank {
                     let to_double = (from as i32 + push_offset * 2) as u8;
                     if to_double < 64 && (empty >> to_double) & 1 != 0 {
@@ -129,7 +133,6 @@ pub fn generate_pawn_moves(pos: &Position, list: &mut MoveList) {
             }
         }
 
-        // Captures
         let mut attacks = attack_table[from as usize] & enemies;
         while attacks != 0 {
             let to = pop_lsb(&mut attacks);
@@ -140,7 +143,6 @@ pub fn generate_pawn_moves(pos: &Position, list: &mut MoveList) {
             }
         }
 
-        // En passant
         if let Some(ep_sq) = pos.en_passant {
             if (attack_table[from as usize] >> ep_sq) & 1 != 0 {
                 list.push(Move::new_en_passant(from, ep_sq));
@@ -151,31 +153,56 @@ pub fn generate_pawn_moves(pos: &Position, list: &mut MoveList) {
 
 pub fn generate_castling_moves(pos: &Position, list: &mut MoveList) {
     let us = pos.side_to_move;
+    let them = us.opposite();
     let occupied = pos.occupied;
+
+    // Can't castle while in check
+    let king_sq = if us == Color::White { 4u8 } else { 60u8 };
+    if pos.is_square_attacked(king_sq, them, occupied) {
+        return;
+    }
 
     if us == Color::White {
         if pos.castling_rights & WK_CASTLE != 0 {
-            // e1=4, f1=5, g1=6, h1=7 — squares between king and rook must be empty
-            if (occupied >> 5) & 1 == 0 && (occupied >> 6) & 1 == 0 {
+            // f1=5, g1=6 must be empty and not attacked
+            if (occupied >> 5) & 1 == 0
+                && (occupied >> 6) & 1 == 0
+                && !pos.is_square_attacked(5, them, occupied)
+                && !pos.is_square_attacked(6, them, occupied)
+            {
                 list.push(Move::new_castling(4, 6));
             }
         }
         if pos.castling_rights & WQ_CASTLE != 0 {
-            // e1=4, d1=3, c1=2, b1=1, a1=0
-            if (occupied >> 1) & 1 == 0 && (occupied >> 2) & 1 == 0 && (occupied >> 3) & 1 == 0 {
+            // b1=1, c1=2, d1=3 must be empty; king walks through d1=3 and c1=2
+            if (occupied >> 1) & 1 == 0
+                && (occupied >> 2) & 1 == 0
+                && (occupied >> 3) & 1 == 0
+                && !pos.is_square_attacked(3, them, occupied)
+                && !pos.is_square_attacked(2, them, occupied)
+            {
                 list.push(Move::new_castling(4, 2));
             }
         }
     } else {
         if pos.castling_rights & BK_CASTLE != 0 {
-            // e8=60, f8=61, g8=62, h8=63
-            if (occupied >> 61) & 1 == 0 && (occupied >> 62) & 1 == 0 {
+            // f8=61, g8=62 must be empty and not attacked
+            if (occupied >> 61) & 1 == 0
+                && (occupied >> 62) & 1 == 0
+                && !pos.is_square_attacked(61, them, occupied)
+                && !pos.is_square_attacked(62, them, occupied)
+            {
                 list.push(Move::new_castling(60, 62));
             }
         }
         if pos.castling_rights & BQ_CASTLE != 0 {
-            // e8=60, d8=59, c8=58, b8=57, a8=56
-            if (occupied >> 57) & 1 == 0 && (occupied >> 58) & 1 == 0 && (occupied >> 59) & 1 == 0 {
+            // b8=57, c8=58, d8=59 must be empty; king walks through d8=59 and c8=58
+            if (occupied >> 57) & 1 == 0
+                && (occupied >> 58) & 1 == 0
+                && (occupied >> 59) & 1 == 0
+                && !pos.is_square_attacked(59, them, occupied)
+                && !pos.is_square_attacked(58, them, occupied)
+            {
                 list.push(Move::new_castling(60, 58));
             }
         }
@@ -288,5 +315,25 @@ mod tests {
         let mut list = MoveList::new();
         generate_castling_moves(&pos, &mut list);
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_castling_blocked_by_check() {
+        // White king is in check from black rook on e8 — no castling allowed
+        let pos = Position::from_fen("4r3/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+        let mut list = MoveList::new();
+        generate_castling_moves(&pos, &mut list);
+        assert_eq!(list.len(), 0);
+    }
+
+    #[test]
+    fn test_castling_blocked_by_attacked_square() {
+        // Black rook on f8 attacks f1 — white can't castle kingside
+        let pos = Position::from_fen("5r2/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
+        let mut list = MoveList::new();
+        generate_castling_moves(&pos, &mut list);
+        // Only queenside should be available
+        assert_eq!(list.len(), 1);
+        assert_eq!(list.as_slice()[0].to(), 2);
     }
 }

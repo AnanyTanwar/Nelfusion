@@ -28,25 +28,20 @@ pub enum PieceType {
 
 pub const NUM_PIECE_TYPES: usize = 6;
 
-// Castling rights as bit flags
-pub const WK_CASTLE: u8 = 1; // white king-side
-pub const WQ_CASTLE: u8 = 2; // white queen-side
-pub const BK_CASTLE: u8 = 4; // black king-side
-pub const BQ_CASTLE: u8 = 8; // black queen-side
+pub const WK_CASTLE: u8 = 1;
+pub const WQ_CASTLE: u8 = 2;
+pub const BK_CASTLE: u8 = 4;
+pub const BQ_CASTLE: u8 = 8;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Position {
-    // [color][piece_type] -> bitboard
     pub pieces: [[Bitboard; NUM_PIECE_TYPES]; 2],
-
-    // occupancy helpers, recomputed from pieces but cached for speed
-    pub occupied_by: [Bitboard; 2], // all white pieces, all black pieces
-    pub occupied: Bitboard,         // all pieces combined
-
+    pub occupied_by: [Bitboard; 2],
+    pub occupied: Bitboard,
     pub side_to_move: Color,
     pub castling_rights: u8,
-    pub en_passant: Option<u8>, // square index, if a double pawn push just happened
-    pub halfmove_clock: u16,    // for 50-move rule
+    pub en_passant: Option<u8>,
+    pub halfmove_clock: u16,
     pub fullmove_number: u16,
 }
 
@@ -67,7 +62,6 @@ impl Position {
     pub fn startpos() -> Position {
         let mut pos = Position::empty();
 
-        // White pieces
         pos.pieces[Color::White as usize][PieceType::Pawn as usize] = 0x0000_0000_0000_FF00;
         pos.pieces[Color::White as usize][PieceType::Knight as usize] = 0x0000_0000_0000_0042;
         pos.pieces[Color::White as usize][PieceType::Bishop as usize] = 0x0000_0000_0000_0024;
@@ -75,7 +69,6 @@ impl Position {
         pos.pieces[Color::White as usize][PieceType::Queen as usize] = 0x0000_0000_0000_0008;
         pos.pieces[Color::White as usize][PieceType::King as usize] = 0x0000_0000_0000_0010;
 
-        // Black pieces (mirrored on ranks 7 and 8)
         pos.pieces[Color::Black as usize][PieceType::Pawn as usize] = 0x00FF_0000_0000_0000;
         pos.pieces[Color::Black as usize][PieceType::Knight as usize] = 0x4200_0000_0000_0000;
         pos.pieces[Color::Black as usize][PieceType::Bishop as usize] = 0x2400_0000_0000_0000;
@@ -98,7 +91,6 @@ impl Position {
             self.occupied_by[Color::White as usize] | self.occupied_by[Color::Black as usize];
     }
 
-    /// Returns the piece type and color occupying a square, if any.
     pub fn piece_at(&self, sq: u8) -> Option<(Color, PieceType)> {
         for &color in &[Color::White, Color::Black] {
             for (i, &bb) in self.pieces[color as usize].iter().enumerate() {
@@ -117,6 +109,57 @@ impl Position {
             }
         }
         None
+    }
+
+    /// Returns true if `sq` is attacked by any piece of `attacker` color.
+    /// Uses `occupied` for sliding piece rays so pinned/blocking pieces are respected.
+    pub fn is_square_attacked(&self, sq: u8, attacker: Color, occupied: Bitboard) -> bool {
+        use crate::movegen::magic::MAGIC_TABLES;
+        use crate::movegen::tables::{
+            KING_ATTACKS, KNIGHT_ATTACKS, PAWN_ATTACKS_BLACK, PAWN_ATTACKS_WHITE,
+        };
+
+        let them = attacker as usize;
+
+        // Pawn attacks — use the defender's pawn attack table to find attackers
+        // e.g. if attacker is White, a white pawn on sq attacks from below,
+        // so we check if any white pawn sits on a square that attacks sq from white's perspective.
+        // Equivalently: does sq appear in PAWN_ATTACKS_WHITE[pawn_sq]?
+        // Faster: check PAWN_ATTACKS_BLACK[sq] (attacks from sq as if black) & white pawns
+        let pawn_attackers = if attacker == Color::White {
+            PAWN_ATTACKS_BLACK[sq as usize]
+        } else {
+            PAWN_ATTACKS_WHITE[sq as usize]
+        };
+        if pawn_attackers & self.pieces[them][PieceType::Pawn as usize] != 0 {
+            return true;
+        }
+
+        // Knights
+        if KNIGHT_ATTACKS[sq as usize] & self.pieces[them][PieceType::Knight as usize] != 0 {
+            return true;
+        }
+
+        // King
+        if KING_ATTACKS[sq as usize] & self.pieces[them][PieceType::King as usize] != 0 {
+            return true;
+        }
+
+        // Bishops + diagonal queens
+        let diag_attackers = self.pieces[them][PieceType::Bishop as usize]
+            | self.pieces[them][PieceType::Queen as usize];
+        if MAGIC_TABLES.bishop_attacks(sq as usize, occupied) & diag_attackers != 0 {
+            return true;
+        }
+
+        // Rooks + straight queens
+        let straight_attackers = self.pieces[them][PieceType::Rook as usize]
+            | self.pieces[them][PieceType::Queen as usize];
+        if MAGIC_TABLES.rook_attacks(sq as usize, occupied) & straight_attackers != 0 {
+            return true;
+        }
+
+        false
     }
 
     pub fn material_count(&self, color: Color) -> u32 {
@@ -170,11 +213,19 @@ mod tests {
     #[test]
     fn test_piece_at() {
         let pos = Position::startpos();
-        // e1 = white king, index 4
         assert_eq!(pos.piece_at(4), Some((Color::White, PieceType::King)));
-        // e8 = black king, index 60
         assert_eq!(pos.piece_at(60), Some((Color::Black, PieceType::King)));
-        // e4 = empty, index 28
         assert_eq!(pos.piece_at(28), None);
+    }
+
+    #[test]
+    fn test_is_square_attacked_startpos() {
+        let pos = Position::startpos();
+        // e2 (sq 12) is attacked by white knight on g1 and b1, and the king/queen can't reach
+        // but most importantly e4 (28) should not be attacked by anyone at startpos
+        assert!(!pos.is_square_attacked(28, Color::White, pos.occupied));
+        assert!(!pos.is_square_attacked(28, Color::Black, pos.occupied));
+        // e3 (sq 20) is attacked by white pawns on d2 and f2
+        assert!(pos.is_square_attacked(20, Color::White, pos.occupied));
     }
 }
