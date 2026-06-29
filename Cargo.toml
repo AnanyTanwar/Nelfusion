@@ -7,6 +7,10 @@ description = "A UCI chess engine written in Rust"
 license = "GPL-3.0"
 readme = "README.md"
 
+[lib]
+name = "nelfusion"
+path = "src/lib.rs"
+
 [[bin]]
 name = "Nelfusion"
 path = "src/main.rs"
