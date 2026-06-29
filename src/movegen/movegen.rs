@@ -209,6 +209,16 @@ pub fn generate_castling_moves(pos: &Position, list: &mut MoveList) {
     }
 }
 
+pub fn generate_pseudo_legal(pos: &Position, list: &mut MoveList) {
+    generate_knight_moves(pos, list);
+    generate_king_moves(pos, list);
+    generate_bishop_moves(pos, list);
+    generate_rook_moves(pos, list);
+    generate_queen_moves(pos, list);
+    generate_pawn_moves(pos, list);
+    generate_castling_moves(pos, list);
+}
+
 fn push_promotions(list: &mut MoveList, from: u8, to: u8) {
     list.push(Move::new_promotion(from, to, PromoPiece::Queen));
     list.push(Move::new_promotion(from, to, PromoPiece::Rook));
@@ -319,7 +329,6 @@ mod tests {
 
     #[test]
     fn test_castling_blocked_by_check() {
-        // White king is in check from black rook on e8 — no castling allowed
         let pos = Position::from_fen("4r3/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
         let mut list = MoveList::new();
         generate_castling_moves(&pos, &mut list);
@@ -328,12 +337,18 @@ mod tests {
 
     #[test]
     fn test_castling_blocked_by_attacked_square() {
-        // Black rook on f8 attacks f1 — white can't castle kingside
         let pos = Position::from_fen("5r2/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
         let mut list = MoveList::new();
         generate_castling_moves(&pos, &mut list);
-        // Only queenside should be available
         assert_eq!(list.len(), 1);
         assert_eq!(list.as_slice()[0].to(), 2);
+    }
+
+    #[test]
+    fn test_pseudo_legal_startpos_count() {
+        let pos = Position::startpos();
+        let mut list = MoveList::new();
+        generate_pseudo_legal(&pos, &mut list);
+        assert_eq!(list.len(), 20);
     }
 }
